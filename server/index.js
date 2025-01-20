@@ -26,6 +26,47 @@ const generateId = () => {
   });
 };
 
+// Функция для автоматического удаления просроченных заказов
+const cleanupExpiredOrders = async () => {
+  try {
+    console.log('Starting automatic cleanup of expired orders...');
+    const today = startOfDay(new Date());
+    
+    await pool.query('START TRANSACTION');
+    
+    const [orders] = await pool.query(
+      'SELECT * FROM orders WHERE order_date < ?',
+      [format(today, 'yyyy-MM-dd')]
+    );
+    
+    for (const order of orders) {
+      const [items] = await pool.query(
+        'SELECT * FROM order_items WHERE order_id = ?',
+        [order.id]
+      );
+      
+      for (const item of items) {
+        await pool.query(
+          'UPDATE products SET quantity = quantity + ? WHERE id = ?',
+          [item.quantity, item.product_id]
+        );
+      }
+      
+      await pool.query('DELETE FROM order_items WHERE order_id = ?', [order.id]);
+      await pool.query('DELETE FROM orders WHERE id = ?', [order.id]);
+      
+      console.log(`Order with ID ${order.id} has been deleted`);
+      
+    }
+    
+    await pool.query('COMMIT');
+    console.log('Automatic cleanup of expired orders completed.');
+  } catch (error) {
+     await pool.query('ROLLBACK');
+    console.error('Error during automatic cleanup of expired orders:', error);
+  }
+};
+
 app.get('/api/products', async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM products');
@@ -59,13 +100,12 @@ app.get('/api/orders', async (req, res) => {
       LEFT JOIN order_items oi ON o.id = oi.order_id
       LEFT JOIN products p ON oi.product_id = p.id
       GROUP BY o.id
-      HAVING JSON_LENGTH(items) > 0 OR items = JSON_ARRAY()
     `);
-
-    const cleanedOrders = orders.map(order => ({
+    
+     const cleanedOrders = orders.map(order => ({
       ...order,
       items: order.items.filter(item => item !== null)
-    }));
+     }));
 
     res.json(cleanedOrders);
   } catch (error) {
@@ -82,7 +122,7 @@ app.post('/api/orders', async (req, res) => {
     
     const orderId = generateId();
     await pool.query(
-      'INSERT INTO orders (id, customer_name, order_date) VALUES (?, ?, ?)',
+      'INSERT INTO orders (id, customer_name, order_date, status) VALUES (?, ?, ?, "pending")',
       [orderId, customer_name, order_date]
     );
     
@@ -208,18 +248,21 @@ app.delete('/api/orders/:id', async (req, res) => {
 });
 
 app.post('/api/advance-date', async (req, res) => {
+    const { date } = req.body;
   try {
+      
+    const parsedDate = date ? startOfDay(new Date(date)) : startOfDay(new Date());
     await pool.query('START TRANSACTION');
     
     const [orders] = await pool.query(
-      'SELECT * FROM orders WHERE order_date = CURDATE() AND status = "pending"'
+      'SELECT * FROM orders WHERE order_date <= ? AND status = "pending"',
+      [format(parsedDate, 'yyyy-MM-dd')]
     );
     
-    if (orders.length > 0) {
-      await pool.query(
-        'UPDATE orders SET status = "completed" WHERE order_date = CURDATE() AND status = "pending"'
-      );
-    }
+      for (const order of orders) {
+          await pool.query('UPDATE orders SET status = "completed" WHERE id = ?', [order.id]);
+      }
+    
     
     await pool.query(`
       UPDATE products 
@@ -237,16 +280,42 @@ app.post('/api/advance-date', async (req, res) => {
 
 app.delete('/api/cleanup-orders', async (req, res) => {
   try {
-    const [result] = await pool.query(
-      'DELETE FROM orders WHERE order_date < CURDATE()'
+    await pool.query('START TRANSACTION');
+    
+    const today = startOfDay(new Date());
+    const [orders] = await pool.query(
+        'SELECT * FROM orders WHERE order_date < ?',
+        [format(today, 'yyyy-MM-dd')]
     );
-    res.json({ deleted: result.affectedRows });
+    
+    for (const order of orders) {
+        const [items] = await pool.query(
+            'SELECT * FROM order_items WHERE order_id = ?',
+            [order.id]
+            );
+        
+        for (const item of items) {
+            await pool.query(
+                'UPDATE products SET quantity = quantity + ? WHERE id = ?',
+                [item.quantity, item.product_id]
+                );
+        }
+        
+        await pool.query('DELETE FROM order_items WHERE order_id = ?', [order.id]);
+        await pool.query('DELETE FROM orders WHERE id = ?', [order.id]);
+    }
+      
+    
+    await pool.query('COMMIT');
+    res.json({ success: true, deleted: orders.length });
   } catch (error) {
+    await pool.query('ROLLBACK');
     console.error('Error cleaning up orders:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-app.listen(port, () => {
+app.listen(port, async () => {
   console.log(`Server running at http://localhost:${port}`);
+  await cleanupExpiredOrders(); // Вызов автоматической очистки при запуске
 });
