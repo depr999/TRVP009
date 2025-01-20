@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { format } from 'date-fns';
-import { Calendar, Package, Plus, Trash2, Edit2, RefreshCw, Loader2 } from 'lucide-react';
+import { format, isBefore, startOfDay } from 'date-fns';
+import { Calendar, Package, Plus, Trash2, Edit2, RefreshCw, Loader2, Trash } from 'lucide-react';
 import toast, { Toaster } from 'react-hot-toast';
 
 interface Product {
@@ -102,7 +102,7 @@ function App() {
         const error = await response.json();
         throw new Error(error.message);
       }
-      
+
       toast.success(editingOrder ? 'Order updated successfully' : 'Order created successfully');
       setIsModalOpen(false);
       setEditingOrder(null);
@@ -128,13 +128,27 @@ function App() {
   const handleAdvanceDate = async () => {
     try {
       await fetch('http://localhost:3000/api/advance-date', {
-        method: 'POST'
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify({date: format(new Date(), 'yyyy-MM-dd')})
       });
       toast.success('Date advanced successfully');
       fetchOrders();
       fetchProducts();
     } catch (error) {
       toast.error('Failed to advance date');
+    }
+  };
+  
+   const handleCleanupOrders = async () => {
+    try {
+      await fetch('http://localhost:3000/api/cleanup-orders', {
+        method: 'DELETE'
+      });
+      toast.success('Expired orders deleted successfully');
+      fetchOrders();
+    } catch (error) {
+      toast.error('Failed to cleanup expired orders');
     }
   };
 
@@ -212,6 +226,13 @@ function App() {
               >
                 <RefreshCw className="h-4 w-4 mr-2" />
                 Advance Date
+              </button>
+               <button
+                onClick={handleCleanupOrders}
+                className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700"
+              >
+                <Trash className="h-4 w-4 mr-2" />
+                Cleanup Orders
               </button>
               <button
                 onClick={() => {
@@ -337,7 +358,7 @@ function App() {
                         id="order_date"
                         value={formData.order_date}
                         onChange={e => setFormData(prev => ({ ...prev, order_date: e.target.value }))}
-                        min={format(new Date(), 'yyyy-MM-dd')}
+                         min={format(new Date(), 'yyyy-MM-dd')}
                         className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
                         required
                       />

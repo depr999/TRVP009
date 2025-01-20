@@ -317,5 +317,5 @@ app.delete('/api/cleanup-orders', async (req, res) => {
 
 app.listen(port, async () => {
   console.log(`Server running at http://localhost:${port}`);
-  await cleanupExpiredOrders(); // Вызов автоматической очистки при запуске
+  await cleanupExpiredOrders(); 
 });
